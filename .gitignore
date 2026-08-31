@@ -1,4 +1,15 @@
+# Secrets / local config
 .env
-venv/
+.env.*
+!.env.example
 .vscode/
+
+# Python
+venv/
 __pycache__/
+*.py[cod]
+.ruff_cache/
+
+# Local data / models
+whisper-data/
+custom-models/
