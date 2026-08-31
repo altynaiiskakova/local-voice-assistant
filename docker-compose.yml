@@ -1,0 +1,22 @@
+services:
+  openwakeword:
+    image: rhasspy/wyoming-openwakeword
+    volumes:
+      - ./custom-models:/custom
+    command: >
+      --uri tcp://0.0.0.0:10400 
+      --custom-model-dir /custom
+      --threshold 0.3
+      --debug
+    ports:
+      - "10400:10400"
+    restart: unless-stopped
+
+  whisper:
+    image: rhasspy/wyoming-whisper
+    command: --model base.en --language en --uri tcp://0.0.0.0:10300
+    volumes:
+      - ./whisper-data:/data
+    ports:
+      - "10300:10300"
+    restart: unless-stopped
