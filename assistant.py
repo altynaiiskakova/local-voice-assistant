@@ -22,6 +22,8 @@ HOME = Path.home()
 # External tools / audio config (override via env if paths differ).
 PIPER_BIN = os.environ.get("PIPER_BIN", str(HOME / "piper/piper/piper"))
 PIPER_MODEL = os.environ.get("PIPER_MODEL", str(HOME / "piper/en_US-lessac-medium.onnx"))
+SOX_BIN = os.environ.get("SOX_BIN", "/usr/bin/sox")
+APLAY_BIN = os.environ.get("APLAY_BIN", "/usr/bin/aplay")
 PIPER_RATE = int(
     os.environ.get("PIPER_RATE", "22050")
 )  # 22050 Hz is the sample rate of the audio Piper produces.
@@ -62,7 +64,7 @@ def _speak(text: str) -> None:
     #                captures mono/16kHz.
     sox = subprocess.Popen(
         [
-            "sox",
+            SOX_BIN,
             "-t",
             "raw",
             "-r",
@@ -91,7 +93,7 @@ def _speak(text: str) -> None:
     # aplay: ALSA playback utility. Reads audio and sends it to a sound device
     # match what the device wants.
     aplay = subprocess.Popen(
-        ["aplay", "-q", "-D", PLAYBACK_DEVICE, "-"],
+        [APLAY_BIN, "-q", "-D", PLAYBACK_DEVICE, "-"],
         stdin=sox.stdout,
     )
 
