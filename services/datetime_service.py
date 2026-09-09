@@ -1,4 +1,4 @@
-import subprocess
+from datetime import datetime
 
 # `date` output minus the timezone name: "Mon 31 Aug 16:46:12 2026"
 DATE_FORMAT = "+%a %d %b %H:%M:%S %Y"
@@ -6,13 +6,7 @@ DATE_FORMAT = "+%a %d %b %H:%M:%S %Y"
 
 def current_datetime() -> str:
     """Return the system date and time from the `date` CLI, without the tz name."""
-    result = subprocess.run(
-        ["date", DATE_FORMAT],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return result.stdout.strip()
+    return datetime.now().strftime("%A, %-d %B %Y, %-I:%M %p")
 
 
 # for testing and debugging, run this file directly to see the current date/time printed to stdout
