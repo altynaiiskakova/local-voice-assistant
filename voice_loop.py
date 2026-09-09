@@ -92,9 +92,7 @@ async def listen_for_open_wake_word(local_mic, wake_word: str) -> None:
             while not detect_task.done():
                 chunk = await local_mic.stdout.readexactly(BYTES_PER_CHUNK)
                 await tcp_open_wake_client.write_event(
-                    AudioChunk(
-                        rate=RATE, width=WIDTH, channels=CHANNELS, audio=chunk
-                    ).event()
+                    AudioChunk(rate=RATE, width=WIDTH, channels=CHANNELS, audio=chunk).event()
                 )
 
             detection = detect_task.result()
@@ -125,11 +123,10 @@ async def capture_audio(local_mic) -> bytes:
 
     The turn ends on whichever comes first: the closing wake word or trailing silence.
     Trailing silence only starts counting once speech has been heard.
-    The tail (wake word or pause) is chopped off the returned audio so whisper doesn't transcribe it.
+    The tail (pause) is chopped off the returned audio so whisper doesn't transcribe it.
     """
     print(
-        f"Capture until '{CLOSE_WAKE_WORD.replace('_', ' ')}' "
-        f"or a {END_SILENCE_SECONDS:g}s pause."
+        f"Capture until '{CLOSE_WAKE_WORD.replace('_', ' ')}' or a {END_SILENCE_SECONDS:g}s pause."
     )
 
     audio_buffer = bytearray()
@@ -148,9 +145,7 @@ async def capture_audio(local_mic) -> bytes:
                 chunk = await local_mic.stdout.readexactly(BYTES_PER_CHUNK)
                 audio_buffer.extend(chunk)
                 await tcp_close_wake_client.write_event(
-                    AudioChunk(
-                        rate=RATE, width=WIDTH, channels=CHANNELS, audio=chunk
-                    ).event()
+                    AudioChunk(rate=RATE, width=WIDTH, channels=CHANNELS, audio=chunk).event()
                 )
 
                 # Check for end of speech conditions: close wake word
@@ -202,9 +197,7 @@ async def transcribe(audio: bytes) -> str:
         for i in range(0, len(audio), BYTES_PER_CHUNK):
             chunk = audio[i : i + BYTES_PER_CHUNK]
             await tcp_whisper_client.write_event(
-                AudioChunk(
-                    rate=RATE, width=WIDTH, channels=CHANNELS, audio=chunk
-                ).event()
+                AudioChunk(rate=RATE, width=WIDTH, channels=CHANNELS, audio=chunk).event()
             )
         # signal end of audio stream
         await tcp_whisper_client.write_event(AudioStop().event())
@@ -219,8 +212,10 @@ async def transcribe(audio: bytes) -> str:
 
 
 async def capture_and_transcribe_user_speech() -> str:
-    """Open mic, wait for open wake word, capture speech until close wake word or pause, close mic and return the transcript.
-    Blocks until the opening wake word fires. The mic is opened for the duration of the turn and closed before returning,
+    """
+    Open mic, wait for wake word, capture speech until a pause, close mic and return the transcript.
+    Blocks until the wake word fires.
+    The mic is opened for the duration of the turn and closed before returning,
     so the assistant can't hear its own TTS.
     """
     local_mic = await start_mic()

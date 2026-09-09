@@ -15,9 +15,7 @@ DEFAULT_CITY = os.environ["DEFAULT_CITY"]
 WTTR_URL = "https://wttr.in"
 
 # Weather city extraction
-_CITY_RE = re.compile(
-    r"\b(?:in|for|at|around)\s+([A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){0,2})"
-)
+_CITY_RE = re.compile(r"\b(?:in|for|at|around)\s+([A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+){0,2})")
 
 
 def match_city_from_prompt(prompt: str) -> str:
@@ -42,7 +40,7 @@ def fetch_weather(city: str = DEFAULT_CITY) -> str:
     return response.text.strip()
 
 
-# for testing and debugging, run this file directly to see the current weather report printed to stdout
+# for testing and debugging, run this file directly to see the current weather report
 # usage: python3 weather_service.py [city]
 if __name__ == "__main__":
     print(fetch_weather(" ".join(sys.argv[1:]) or DEFAULT_CITY))
