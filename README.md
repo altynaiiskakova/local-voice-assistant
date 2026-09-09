@@ -53,3 +53,13 @@ uv sync
 uv run voice_loop.py
 ```
 Say the open wake word, ask your question, then either say the close wake word or just pause.
+
+
+## Wake words
+
+Custom openWakeWord models go in `custom-models/` as `.tflite` files and
+are loaded by the openwakeword container on start. The model name is the
+filename without the extension (`hey_luna.tflite` is `hey_luna`).
+
+`hey_luna.tflite` is committed here. More community-trained models are available at: 
+[fwartner/home-assistant-wakewords-collection](https://github.com/fwartner/home-assistant-wakewords-collection).
