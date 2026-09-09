@@ -1,0 +1,44 @@
+[project]
+name = "local-voice-assistant"
+version = "0.1.0"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "caldav~=3.2.1",
+    "icalendar~=7.2.0",
+    "python-dotenv>=1.2.2",
+    "requests>=2.34.2",
+    "wyoming>=1.10.0",
+]
+
+[tool.ruff]
+target-version = "py312"
+
+extend-exclude = ["custom-models", "whisper-data"]
+
+line-length = 100
+indent-width = 4
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "S", "BLE", "N", "EXE", "W", "C90", "I"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.format]
+# Like Black, use double quotes for strings.
+quote-style = "double"
+
+# Like Black, indent with spaces, rather than tabs.
+indent-style = "space"
+
+# Like Black, respect magic trailing commas.
+skip-magic-trailing-comma = false
+
+# Like Black, automatically detect the appropriate line ending.
+line-ending = "auto"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.16.6",
+]
