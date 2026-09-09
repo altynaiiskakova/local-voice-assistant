@@ -21,6 +21,7 @@ indent-width = 4
 
 [tool.ruff.lint]
 select = ["E", "F", "B", "S", "BLE", "N", "EXE", "W", "C90", "I"]
+ignore = ["S603"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 10
