@@ -21,22 +21,16 @@ from services.weather_service import fetch_weather, match_city_from_prompt
 HOME = Path.home()
 # External tools / audio config (override via env if paths differ).
 PIPER_BIN = os.environ.get("PIPER_BIN", str(HOME / "piper/piper/piper"))
-PIPER_MODEL = os.environ.get(
-    "PIPER_MODEL", str(HOME / "piper/en_US-lessac-medium.onnx")
-)
+PIPER_MODEL = os.environ.get("PIPER_MODEL", str(HOME / "piper/en_US-lessac-medium.onnx"))
 PIPER_RATE = int(
     os.environ.get("PIPER_RATE", "22050")
-)  # 22050 Hz is the sample rate of the audio Piper produces. The lessac-medium voice model was trained at that rate.
+)  # 22050 Hz is the sample rate of the audio Piper produces.
 PLAYBACK_DEVICE = os.environ["AUDIO_DEVICE"]
 LEAD_SILENCE_SECONDS = float(os.environ.get("LEAD_SILENCE_SECONDS", "1"))
 FALLBACK_TEXT = "Sorry, something went wrong fetching the answer."
 
-CALENDAR_RE = re.compile(
-    r"\b(calendar|appointment|meeting|schedule|event)\b", re.IGNORECASE
-)
-WEATHER_RE = re.compile(
-    r"\b(weather|temperature|forecast|rain|sunny|cold|hot)\b", re.IGNORECASE
-)
+CALENDAR_RE = re.compile(r"\b(calendar|appointment|meeting|schedule|event)\b", re.IGNORECASE)
+WEATHER_RE = re.compile(r"\b(weather|temperature|forecast|rain|sunny|cold|hot)\b", re.IGNORECASE)
 STYLE_INSTRUCTIONS = (
     "Do not use any emojis, smilies or asterisks for emphasis. "
     "The answer will not be seen by a human, it will be spoken aloud. "
@@ -112,9 +106,7 @@ def _speak(text: str) -> None:
     # wait for sox and aplay to finish, and report any errors
     for process, tool_name in ((sox, "sox"), (aplay, "aplay")):
         if process.wait() != 0:
-            print(
-                f"[assistant] {tool_name} exited {process.returncode}", file=sys.stderr
-            )
+            print(f"[assistant] {tool_name} exited {process.returncode}", file=sys.stderr)
 
 
 def _build_prompt(question: str) -> str:
@@ -122,7 +114,7 @@ def _build_prompt(question: str) -> str:
     parts = [f"The current date and time is {current_datetime()}."]
 
     context = ""
-    # If the prompt mentions calendar-related keywords, fetch upcoming events and include them in the prompt for context.
+    # If the prompt mentions calendar-related keywords, fetch events and include them in the prompt.
     if CALENDAR_RE.search(question):
         events = fetch_upcoming_events(7)
         context = (
@@ -130,7 +122,8 @@ def _build_prompt(question: str) -> str:
             "Answer the user's question based on this calendar."
         )
 
-    # If the prompt mentions weather-related keywords, fetch the weather report and include it in the prompt for context.
+    # If the prompt mentions weather-related keywords, fetch weather
+    # report and include it in the prompt.
     elif WEATHER_RE.search(question):
         city = match_city_from_prompt(question)
         report = fetch_weather(city)

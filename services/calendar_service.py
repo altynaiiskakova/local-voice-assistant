@@ -59,7 +59,7 @@ def fetch_upcoming_events(days: int = 7) -> str:
     return sorted_events
 
 
-# for testing and debugging, run this file directly to see the next 7 days of events printed to stdout
+# for testing and debugging, run this file directly
 # usgage: python3 calendar_service.py
 if __name__ == "__main__":
     print(fetch_upcoming_events())
