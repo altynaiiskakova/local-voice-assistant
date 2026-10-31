@@ -1,10 +1,7 @@
 import array
 import asyncio
-import io
-import math
 import os
 import sys
-import wave
 
 from dotenv import load_dotenv
 from wyoming.asr import Transcribe, Transcript
@@ -12,7 +9,7 @@ from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.client import AsyncTcpClient
 from wyoming.wake import Detect, Detection
 
-from assistant import APLAY_BIN, PLAYBACK_DEVICE, ask_and_speak
+from assistant import PLAYBACK_DEVICE, SOX_BIN, ask_and_speak
 
 load_dotenv()
 
@@ -47,44 +44,28 @@ PAUSE_TAIL_SECONDS = END_SILENCE_SECONDS - 0.5  # drop most of the trailing paus
 PAUSE_TAIL_BYTES = int(PAUSE_TAIL_SECONDS * RATE) * WIDTH * CHANNELS
 
 # wake word acknowledgement chime
-CHIME_RATE = 22050 # Hz sample rate for the chime
-CHIME_NOTES = ((1320, 0.15), (1760, 0.25))  # (frequency Hz, seconds) => a rising two-note "ding"
 CHIME_VOLUME = 0.7  # between 0.0 - 1.0
-CHIME_LEAD_SECONDS = 0.3 # leading silence so the speaker can wake up before the chime
+CHIME_LEAD_SECONDS = 0.3  # leading silence so the speaker can wake up before the chime
 
 
-def _make_chime() -> bytes:
+def _chime_note(frequency: int, seconds: float) -> list[str]:
     """
-    Synthesize the chime once as an in-memory stereo WAV.
-    Each note is a sine with a fast attack, full volume for its first half, then a linear fade-out.
+    sox effects for one note: a sine with a 10ms fade-in, full volume for its first half, then a linear fade-out.
     """
-    samples = array.array("h", [0, 0] * int(CHIME_LEAD_SECONDS * CHIME_RATE))
-    attack = int(0.01 * CHIME_RATE)
-    for frequency, seconds in CHIME_NOTES:
-        note_samples = int(seconds * CHIME_RATE)
-        for i in range(note_samples):
-            envelope = min(1.0, i / attack, 2 * (1 - i / note_samples))
-            value = int(CHIME_VOLUME * 32767 * envelope * math.sin(2 * math.pi * frequency * i / CHIME_RATE))
-            samples.extend((value, value))  # left, right
-
-    buffer = io.BytesIO()
-    with wave.open(buffer, "wb") as wav:
-        wav.setnchannels(2)
-        wav.setsampwidth(2)
-        wav.setframerate(CHIME_RATE)
-        wav.writeframes(samples.tobytes())
-    return buffer.getvalue()
+    return ["synth", str(seconds), "sine", str(frequency), "fade", "t", "0.01", str(seconds), str(seconds / 2), "vol", str(CHIME_VOLUME)]
 
 
-CHIME_WAV = _make_chime()
+# a rising two-note "ding". sox runs effect chains separated by ":" one after another,
+# and "pad" in the first chain prepends the lead silence.
+CHIME_SOX_EFFECTS = [*_chime_note(1320, 0.15), "pad", str(CHIME_LEAD_SECONDS), ":", *_chime_note(1760, 0.25)]
 
 
 async def play_chime() -> None:
     """Play the chime to signal the assistant is listening after a wake word detection."""
-    aplay = await asyncio.create_subprocess_exec(APLAY_BIN, "-q", "-D", PLAYBACK_DEVICE, "-", stdin=asyncio.subprocess.PIPE)
-    await aplay.communicate(CHIME_WAV)
-    if aplay.returncode != 0:
-        print(f"[voice_loop] aplay exited {aplay.returncode}", file=sys.stderr)
+    # sox synthesizes the notes from null input (-n) and plays them straight to the ALSA (Advanced Linux Sound Architecture) device.
+    sox = await asyncio.create_subprocess_exec(SOX_BIN, "-q", "-n", "-c", "2", "-t", "alsa", PLAYBACK_DEVICE, *CHIME_SOX_EFFECTS)
+    if await sox.wait() != 0:
+        print(f"[voice_loop] sox exited {sox.returncode}", file=sys.stderr)
 
 
 async def start_mic() -> asyncio.subprocess.Process:
@@ -188,6 +169,7 @@ async def capture_audio(local_mic) -> bytes:
                     silent_chunks += 1
                     if silent_chunks >= END_SILENCE_CHUNKS:
                         print("Detected pause, wrapping up.")
+                        await play_chime()
                         return _trim_tail(audio_buffer, PAUSE_TAIL_BYTES)
 
                 # Check for end of speech conditions: max time reached
