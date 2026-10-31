@@ -78,6 +78,7 @@ async def _wake_word_detection(tcp_wake_client: AsyncTcpClient):
 async def listen_for_open_wake_word(local_mic, wake_word: str) -> None:
     """Pump mic audio into openWakeWord until `wake_word` fires. Audio is discarded."""
     print("Stream mic to openwakeword until it detects the wake word.")
+    print(f"Listening for wake word: '{wake_word}'")
 
     async with AsyncTcpClient.from_uri(WAKE_WORD_URI) as tcp_open_wake_client:
         await tcp_open_wake_client.write_event(Detect(names=[wake_word]).event())
@@ -125,36 +126,25 @@ async def capture_audio(local_mic) -> bytes:
     Trailing silence only starts counting once speech has been heard.
     The tail (pause) is chopped off the returned audio so whisper doesn't transcribe it.
     """
-    print(
-        f"Capture until '{CLOSE_WAKE_WORD.replace('_', ' ')}' or a {END_SILENCE_SECONDS:g}s pause."
-    )
+    print(f"Capture until '{END_SILENCE_SECONDS:g}s pause.")
 
     audio_buffer = bytearray()
     speech_started = False
     silent_chunks = 0
 
     async with AsyncTcpClient.from_uri(WAKE_WORD_URI) as tcp_close_wake_client:
-        await tcp_close_wake_client.write_event(Detect(names=[CLOSE_WAKE_WORD]).event())
         await tcp_close_wake_client.write_event(
             AudioStart(rate=RATE, width=WIDTH, channels=CHANNELS).event()
         )
-        detect_task = asyncio.create_task(_wake_word_detection(tcp_close_wake_client))
 
         try:
             while True:
+                # read a chunk of audio from the mic and send it to the wake service
                 chunk = await local_mic.stdout.readexactly(BYTES_PER_CHUNK)
                 audio_buffer.extend(chunk)
                 await tcp_close_wake_client.write_event(
                     AudioChunk(rate=RATE, width=WIDTH, channels=CHANNELS, audio=chunk).event()
                 )
-
-                # Check for end of speech conditions: close wake word
-                if detect_task.done():
-                    detection = detect_task.result()
-                    if detection is None:
-                        raise RuntimeError("wake service closed the connection")
-                    print(f"Detected: {detection.name}")
-                    return _trim_tail(audio_buffer, WAKE_TAIL_BYTES)
 
                 # Check for end of speech conditions: trailing silence
                 if _chunk_rms(chunk) > SILENCE_RMS_THRESHOLD:
@@ -171,7 +161,6 @@ async def capture_audio(local_mic) -> bytes:
                     print("Max utterance length reached, cutting off.")
                     return bytes(audio_buffer)
         finally:
-            detect_task.cancel()
             try:
                 await tcp_close_wake_client.write_event(AudioStop().event())
             except OSError as e:
