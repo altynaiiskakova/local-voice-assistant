@@ -10,6 +10,6 @@ def current_datetime() -> str:
 
 
 # for testing and debugging, run this file directly to see the current date/time printed to stdout
-# usage: python3 datetime_service.py
+# usage: uv run datetime_service.py
 if __name__ == "__main__":
     print(current_datetime())

@@ -16,7 +16,7 @@ target-version = "py312"
 
 extend-exclude = ["custom-models", "whisper-data"]
 
-line-length = 100
+line-length = 150
 indent-width = 4
 
 [tool.ruff.lint]

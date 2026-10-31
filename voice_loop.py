@@ -83,18 +83,14 @@ async def listen_for_open_wake_word(local_mic, wake_word: str) -> None:
     async with AsyncTcpClient.from_uri(WAKE_WORD_URI) as tcp_open_wake_client:
         await tcp_open_wake_client.write_event(Detect(names=[wake_word]).event())
 
-        await tcp_open_wake_client.write_event(
-            AudioStart(rate=RATE, width=WIDTH, channels=CHANNELS).event()
-        )
+        await tcp_open_wake_client.write_event(AudioStart(rate=RATE, width=WIDTH, channels=CHANNELS).event())
 
         detect_task = asyncio.create_task(_wake_word_detection(tcp_open_wake_client))
 
         try:
             while not detect_task.done():
                 chunk = await local_mic.stdout.readexactly(BYTES_PER_CHUNK)
-                await tcp_open_wake_client.write_event(
-                    AudioChunk(rate=RATE, width=WIDTH, channels=CHANNELS, audio=chunk).event()
-                )
+                await tcp_open_wake_client.write_event(AudioChunk(rate=RATE, width=WIDTH, channels=CHANNELS, audio=chunk).event())
 
             detection = detect_task.result()
             if detection is None:
@@ -126,25 +122,21 @@ async def capture_audio(local_mic) -> bytes:
     Trailing silence only starts counting once speech has been heard.
     The tail (pause) is chopped off the returned audio so whisper doesn't transcribe it.
     """
-    print(f"Capture until '{END_SILENCE_SECONDS:g}s pause.")
+    print(f"Capture until {END_SILENCE_SECONDS:g}s pause.")
 
     audio_buffer = bytearray()
     speech_started = False
     silent_chunks = 0
 
     async with AsyncTcpClient.from_uri(WAKE_WORD_URI) as tcp_close_wake_client:
-        await tcp_close_wake_client.write_event(
-            AudioStart(rate=RATE, width=WIDTH, channels=CHANNELS).event()
-        )
+        await tcp_close_wake_client.write_event(AudioStart(rate=RATE, width=WIDTH, channels=CHANNELS).event())
 
         try:
             while True:
                 # read a chunk of audio from the mic and send it to the wake service
                 chunk = await local_mic.stdout.readexactly(BYTES_PER_CHUNK)
                 audio_buffer.extend(chunk)
-                await tcp_close_wake_client.write_event(
-                    AudioChunk(rate=RATE, width=WIDTH, channels=CHANNELS, audio=chunk).event()
-                )
+                await tcp_close_wake_client.write_event(AudioChunk(rate=RATE, width=WIDTH, channels=CHANNELS, audio=chunk).event())
 
                 # Check for end of speech conditions: trailing silence
                 if _chunk_rms(chunk) > SILENCE_RMS_THRESHOLD:
@@ -179,15 +171,11 @@ async def transcribe(audio: bytes) -> str:
 
     async with AsyncTcpClient.from_uri(WHISPER_URI) as tcp_whisper_client:
         await tcp_whisper_client.write_event(Transcribe(language="en").event())
-        await tcp_whisper_client.write_event(
-            AudioStart(rate=RATE, width=WIDTH, channels=CHANNELS).event()
-        )
+        await tcp_whisper_client.write_event(AudioStart(rate=RATE, width=WIDTH, channels=CHANNELS).event())
         # send audio in chunks to whisper service
         for i in range(0, len(audio), BYTES_PER_CHUNK):
             chunk = audio[i : i + BYTES_PER_CHUNK]
-            await tcp_whisper_client.write_event(
-                AudioChunk(rate=RATE, width=WIDTH, channels=CHANNELS, audio=chunk).event()
-            )
+            await tcp_whisper_client.write_event(AudioChunk(rate=RATE, width=WIDTH, channels=CHANNELS, audio=chunk).event())
         # signal end of audio stream
         await tcp_whisper_client.write_event(AudioStop().event())
 

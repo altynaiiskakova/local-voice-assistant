@@ -24,21 +24,13 @@ PIPER_BIN = os.environ.get("PIPER_BIN", str(HOME / "piper/piper/piper"))
 PIPER_MODEL = os.environ.get("PIPER_MODEL", str(HOME / "piper/en_US-lessac-medium.onnx"))
 SOX_BIN = os.environ.get("SOX_BIN", "/usr/bin/sox")
 APLAY_BIN = os.environ.get("APLAY_BIN", "/usr/bin/aplay")
-PIPER_RATE = int(
-    os.environ.get("PIPER_RATE", "22050")
-)  # 22050 Hz is the sample rate of the audio Piper produces.
+PIPER_RATE = int(os.environ.get("PIPER_RATE", "22050"))  # 22050 Hz is the sample rate of the audio Piper produces.
 PLAYBACK_DEVICE = os.environ["AUDIO_DEVICE"]
 LEAD_SILENCE_SECONDS = float(os.environ.get("LEAD_SILENCE_SECONDS", "1"))
 FALLBACK_TEXT = "Sorry, something went wrong fetching the answer."
 
 CALENDAR_RE = re.compile(r"\b(calendar|appointment|meeting|schedule|event)\b", re.IGNORECASE)
 WEATHER_RE = re.compile(r"\b(weather|temperature|forecast|rain|sunny|cold|hot)\b", re.IGNORECASE)
-STYLE_INSTRUCTIONS = (
-    "Do not use any emojis, smilies or asterisks for emphasis. "
-    "The answer will not be seen by a human, it will be spoken aloud. "
-    "Be brief and conversational. Do not use lists, markdown, or symbols. "
-    "Speak in plain sentences."
-)
 
 
 def _speak(text: str) -> None:
@@ -119,28 +111,20 @@ def _build_prompt(question: str) -> str:
     # If the prompt mentions calendar-related keywords, fetch events and include them in the prompt.
     if CALENDAR_RE.search(question):
         events = fetch_upcoming_events(7)
-        context = (
-            f"The user's calendar for the next 7 days:\n{events}\n"
-            "Answer the user's question based on this calendar."
-        )
+        context = f"The user's calendar for the next 7 days:\n{events}\nAnswer the user's question based on this calendar."
 
     # If the prompt mentions weather-related keywords, fetch weather
     # report and include it in the prompt.
     elif WEATHER_RE.search(question):
         city = match_city_from_prompt(question)
         report = fetch_weather(city)
-        context = (
-            f"\n{report}\n"
-            "Answer the user's question based on this report and add "
-            "recommendations for appropriate clothing and accessories."
-        )
+        context = f"\n{report}\nAnswer the user's question based on this report and add recommendations for appropriate clothing and accessories."
     else:
         context = ""
 
     if context:
         parts.append(context)
 
-    parts.append(STYLE_INSTRUCTIONS)
     parts.append(f"User's question: {question}")
     return "\n\n".join(parts)
 
@@ -155,7 +139,7 @@ def ask_and_speak(question: str) -> str:
         prompt = _build_prompt(question)
     except (requests.RequestException, DAVError, OSError) as exc:
         print(f"[assistant] context lookup failed: {exc}", file=sys.stderr)
-        prompt = f"{STYLE_INSTRUCTIONS}\n\nUser's question: {question}"
+        prompt = f"\nUser's question: {question}"
 
     print("Asking LLM...", file=sys.stderr)
     try:
@@ -170,7 +154,7 @@ def ask_and_speak(question: str) -> str:
 
 
 # For testing and debugging, run this file directly to speak a prompt from the command line.
-# usage: python3 assistant.py "what's on my calendar tomorrow?"
+# usage: uv run assistant.py "what's on my calendar tomorrow?"
 if __name__ == "__main__":
     prompt = " ".join(sys.argv[1:])
     ask_and_speak(prompt)
