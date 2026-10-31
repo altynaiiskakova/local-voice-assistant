@@ -1,42 +1,52 @@
 """
 Turn a text prompt into a spoken answer from local LLM.
-    text -> ollama_client.ask_llm() -> piper (TTS) -> sox - Sound eXchange (pad + stereo) -> aplay
+    text -> ollama_client.ask_llm() -> wyoming-piper service (TTS) -> sox - Sound eXchange (pad + stereo) -> aplay
 The answer is streamed: each sentence goes to piper as soon as the LLM finishes it.
 Call different services for context if the prompt mentions calendar, weather, etc.
 """
 
 import os
 import re
+import socket
 import subprocess
 import sys
 from collections.abc import Iterable, Iterator
-from pathlib import Path
-from typing import IO
+from urllib.parse import urlparse
 
 import requests
 from caldav.lib.error import DAVError
+from wyoming.audio import AudioChunk, AudioStop
+from wyoming.event import read_event, write_event
+from wyoming.tts import Synthesize
 
 from ollama_client import ask_llm
 from services.calendar_service import fetch_upcoming_events
 from services.weather_service import fetch_weather, match_city_from_prompt
 
-HOME = Path.home()
 # External tools / audio config (override via env if paths differ).
-PIPER_BIN = os.environ.get("PIPER_BIN", str(HOME / "piper/piper/piper"))
-PIPER_MODEL = os.environ.get("PIPER_MODEL", str(HOME / "piper/en_US-lessac-medium.onnx"))
+PIPER_URI = urlparse(os.environ["PIPER_URI"])
 SOX_BIN = os.environ.get("SOX_BIN", "/usr/bin/sox")
 APLAY_BIN = os.environ.get("APLAY_BIN", "/usr/bin/aplay")
-PIPER_RATE = int(os.environ.get("PIPER_RATE", "22050"))  # 22050 Hz is the sample rate of the audio Piper produces.
 PLAYBACK_DEVICE = os.environ["AUDIO_DEVICE"]
 LEAD_SILENCE_SECONDS = 0.2
 FALLBACK_TEXT = "Sorry, something went wrong fetching the answer."
 
-CALENDAR_RE = re.compile(r"\b(calendar|appointment|meeting|schedule|event)\b", re.IGNORECASE)
+CALENDAR_RE = re.compile(r"\b(calendar|appointment|meeting|schedule|event|events)\b", re.IGNORECASE)
 WEATHER_RE = re.compile(r"\b(weather|temperature|forecast|rain|sunny|cold|hot)\b", re.IGNORECASE)
 
 
-def _start_playback(audio: IO[bytes]) -> list[tuple[subprocess.Popen, str]]:
-    """Start sox | aplay reading piper's raw `audio`. Returns the processes with their names."""
+def _synthesize(text: str) -> Iterator[AudioChunk]:
+    """Yield the raw audio chunks the wyoming-piper service synthesizes for `text`."""
+    with socket.create_connection((PIPER_URI.hostname, PIPER_URI.port)) as sock, sock.makefile("rwb") as conn:
+        write_event(Synthesize(text=text).event(), conn)
+        # the reply is AudioStart, then AudioChunks, then AudioStop
+        while (event := read_event(conn)) is not None and not AudioStop.is_type(event.type):
+            if AudioChunk.is_type(event.type):
+                yield AudioChunk.from_event(event)
+
+
+def _start_playback(rate: int) -> tuple[subprocess.Popen, subprocess.Popen]:
+    """Start sox | aplay for raw 16-bit mono audio at `rate` Hz, written to sox's stdin."""
     # sox ("Sound eXchange") converts and applies effects:
     #   pad 1 0    - one second of leading silence. The PowerConf takes a moment
     #                to wake up when audio starts, and without this it swallows
@@ -49,7 +59,7 @@ def _start_playback(audio: IO[bytes]) -> list[tuple[subprocess.Popen, str]]:
             "-t",
             "raw",
             "-r",
-            str(PIPER_RATE),
+            str(rate),
             "-e",
             "signed",
             "-b",
@@ -66,7 +76,7 @@ def _start_playback(audio: IO[bytes]) -> list[tuple[subprocess.Popen, str]]:
             "channels",
             "2",
         ],
-        stdin=audio,
+        stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
     )
@@ -82,45 +92,36 @@ def _start_playback(audio: IO[bytes]) -> list[tuple[subprocess.Popen, str]]:
     )
     sox.stdout.close()
 
-    return [(sox, "sox"), (aplay, "aplay")]
+    return sox, aplay
 
 
 def _speak(sentences: Iterable[str]) -> str:
     """Synthesize `sentences` as they arrive and play them through the configured output device.
-    Pipeline: piper | sox (pad + stereo) | aplay.
+    Pipeline: wyoming-piper service | sox (pad + stereo) | aplay.
     Returns everything that was spoken.
     """
-    # piper starts before the first sentence exists, so it loads its model while the LLM is still generating.
-    piper = subprocess.Popen(
-        [PIPER_BIN, "--model", PIPER_MODEL, "--output_raw"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-    )
-    # sox and aplay start only with the first sentence: sox emits the lead silence immediately
-    playback = []
-
-    # feed the text to Piper one sentence per line; piper synthesizes each line as soon as it reads it
+    # sox and aplay start only with the first audio: sox emits the lead silence immediately
+    sox = aplay = None
     spoken = []
     try:
         for sentence in sentences:
-            if not playback:
-                playback = _start_playback(piper.stdout)
-                piper.stdout.close()
             print(f"[assistant] LLM says: {sentence}")
-            piper.stdin.write((sentence.replace("\n", " ") + "\n").encode())
-            piper.stdin.flush()
+            for chunk in _synthesize(sentence):
+                if sox is None:
+                    sox, aplay = _start_playback(chunk.rate)
+                sox.stdin.write(chunk.audio)
             spoken.append(sentence)
+    except OSError as exc:
+        print(f"[assistant] piper service failed: {exc}", file=sys.stderr)
     finally:
-        # closing stdin tells piper the text is finished, even if the sentences stopped with an error
-        piper.stdin.close()
-        if not playback:
-            piper.stdout.close()
+        if sox is not None:
+            # closing stdin tells sox the audio is finished, even if the sentences stopped with an error
+            sox.stdin.close()
 
-        # wait for the whole pipeline to finish playing, and report any errors
-        for process, tool_name in [(piper, "piper"), *playback]:
-            if process.wait() != 0:
-                print(f"[assistant] {tool_name} exited {process.returncode}", file=sys.stderr)
+            # wait for playback to finish, and report any errors
+            for process, tool_name in ((sox, "sox"), (aplay, "aplay")):
+                if process.wait() != 0:
+                    print(f"[assistant] {tool_name} exited {process.returncode}", file=sys.stderr)
 
     return " ".join(spoken)
 

@@ -59,7 +59,7 @@ def get_calendar_text(caldav_client, days: int = 7) -> str:
         return "No events in the next 7 days."
 
     events.sort(key=lambda e: e[0])
-    lines = [f"{day_prefix(event_date, today)}{event_date:%A %d %B}, {event_time}: {summary}" for _, event_date, event_time, summary in events]
+    lines = [f"{day_prefix(event_date, today)}{event_date:%A %-d %B}, {event_time}: {summary}" for _, event_date, event_time, summary in events]
     return "\n".join(lines)
 
 

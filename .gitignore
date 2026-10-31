@@ -13,3 +13,4 @@ __pycache__/
 
 # Local data / models
 whisper-data/
+piper-data/

@@ -16,7 +16,7 @@ mic ──▶ openWakeWord ──▶ Whisper (STT) ──▶ prompt builder ─�
 | Wake word | [openWakeWord](https://github.com/dscripka/openWakeWord) via Wyoming | local (Docker) |
 | STT | [Whisper](https://github.com/rhasspy/wyoming-faster-whisper) via Wyoming | local (Docker) |
 | Language model | [Ollama](https://ollama.com/) (`gemma2:2b` by default) | local |
-| TTS | [Piper](https://github.com/rhasspy/piper) | local |
+| TTS | [Piper](https://github.com/rhasspy/wyoming-piper) via Wyoming | local (Docker) |
 | Calendar context | CalDAV (e.g. Nextcloud) | network - your server |
 | Weather context | [wttr.in](https://wttr.in) | network - external |
 
@@ -27,9 +27,8 @@ run when the question mentions a calendar event or the weather.
 
 - Python 3.11+
 - [Ollama](https://ollama.com/) running locally with a model pulled (`ollama pull gemma2:2b`)
-- [Piper](https://github.com/rhasspy/piper) binary and a voice model
 - `sox`, `alsa-utils` (`arecord` / `aplay`)
-- Docker (for the wake-word and Whisper services)
+- Docker (for the wake-word, Whisper and Piper services)
 - A microphone and speaker
 
 ## Setup
@@ -41,7 +40,7 @@ cd local-voice-assistant
 
 cp .env.example .env   # then set the values
 
-docker compose up -d   # starts openWakeWord + Whisper services
+docker compose up -d   # starts openWakeWord, Whisper and Piper services
 ```
 
 ## Usage
