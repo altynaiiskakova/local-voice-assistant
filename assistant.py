@@ -1,6 +1,7 @@
 """
 Turn a text prompt into a spoken answer from local LLM.
-    text -> ollama_client.answer() -> piper (TTS) -> sox - Sound eXchange (pad + stereo) -> aplay
+    text -> ollama_client.ask_llm() -> piper (TTS) -> sox - Sound eXchange (pad + stereo) -> aplay
+The answer is streamed: each sentence goes to piper as soon as the LLM finishes it.
 Call different services for context if the prompt mentions calendar, weather, etc.
 """
 
@@ -8,7 +9,9 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Iterable, Iterator
 from pathlib import Path
+from typing import IO
 
 import requests
 from caldav.lib.error import DAVError
@@ -25,28 +28,15 @@ SOX_BIN = os.environ.get("SOX_BIN", "/usr/bin/sox")
 APLAY_BIN = os.environ.get("APLAY_BIN", "/usr/bin/aplay")
 PIPER_RATE = int(os.environ.get("PIPER_RATE", "22050"))  # 22050 Hz is the sample rate of the audio Piper produces.
 PLAYBACK_DEVICE = os.environ["AUDIO_DEVICE"]
-LEAD_SILENCE_SECONDS = 1.0
+LEAD_SILENCE_SECONDS = 0.2
 FALLBACK_TEXT = "Sorry, something went wrong fetching the answer."
 
 CALENDAR_RE = re.compile(r"\b(calendar|appointment|meeting|schedule|event)\b", re.IGNORECASE)
 WEATHER_RE = re.compile(r"\b(weather|temperature|forecast|rain|sunny|cold|hot)\b", re.IGNORECASE)
 
 
-def _speak(text: str) -> None:
-    """Synthesize `text` and play it through the configured output device.
-    Pipeline: piper | sox (pad + stereo) | aplay.
-    """
-    text = text.strip()
-    if not text:
-        return
-
-    piper = subprocess.Popen(
-        [PIPER_BIN, "--model", PIPER_MODEL, "--output_raw"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-    )
-
+def _start_playback(audio: IO[bytes]) -> list[tuple[subprocess.Popen, str]]:
+    """Start sox | aplay reading piper's raw `audio`. Returns the processes with their names."""
     # sox ("Sound eXchange") converts and applies effects:
     #   pad 1 0    - one second of leading silence. The PowerConf takes a moment
     #                to wake up when audio starts, and without this it swallows
@@ -76,7 +66,7 @@ def _speak(text: str) -> None:
             "channels",
             "2",
         ],
-        stdin=piper.stdout,
+        stdin=audio,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
     )
@@ -90,19 +80,49 @@ def _speak(text: str) -> None:
         [APLAY_BIN, "-q", "--buffer-time=500000", "-D", PLAYBACK_DEVICE, "-"],
         stdin=sox.stdout,
     )
-
-    piper.stdout.close()
     sox.stdout.close()
 
-    # feed the text to Piper
-    piper.communicate(input=text.encode())
-    if piper.returncode != 0:
-        print(f"[assistant] piper exited {piper.returncode}", file=sys.stderr)
+    return [(sox, "sox"), (aplay, "aplay")]
 
-    # wait for sox and aplay to finish, and report any errors
-    for process, tool_name in ((sox, "sox"), (aplay, "aplay")):
-        if process.wait() != 0:
-            print(f"[assistant] {tool_name} exited {process.returncode}", file=sys.stderr)
+
+def _speak(sentences: Iterable[str]) -> str:
+    """Synthesize `sentences` as they arrive and play them through the configured output device.
+    Pipeline: piper | sox (pad + stereo) | aplay.
+    Returns everything that was spoken.
+    """
+    # piper starts before the first sentence exists, so it loads its model while the LLM is still generating.
+    piper = subprocess.Popen(
+        [PIPER_BIN, "--model", PIPER_MODEL, "--output_raw"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    # sox and aplay start only with the first sentence: sox emits the lead silence immediately
+    playback = []
+
+    # feed the text to Piper one sentence per line; piper synthesizes each line as soon as it reads it
+    spoken = []
+    try:
+        for sentence in sentences:
+            if not playback:
+                playback = _start_playback(piper.stdout)
+                piper.stdout.close()
+            print(f"[assistant] LLM says: {sentence}")
+            piper.stdin.write((sentence.replace("\n", " ") + "\n").encode())
+            piper.stdin.flush()
+            spoken.append(sentence)
+    finally:
+        # closing stdin tells piper the text is finished, even if the sentences stopped with an error
+        piper.stdin.close()
+        if not playback:
+            piper.stdout.close()
+
+        # wait for the whole pipeline to finish playing, and report any errors
+        for process, tool_name in [(piper, "piper"), *playback]:
+            if process.wait() != 0:
+                print(f"[assistant] {tool_name} exited {process.returncode}", file=sys.stderr)
+
+    return " ".join(spoken)
 
 
 def _build_prompt(question: str) -> str:
@@ -143,16 +163,22 @@ def ask_and_speak(question: str) -> str:
         print(f"[assistant] context lookup failed: {exc}", file=sys.stderr)
         prompt = f"\nUser's question: {question}"
 
-    print("Asking LLM...", file=sys.stderr)
+    # print("Asking LLM...", file=sys.stderr)
+    return _speak(_yield_sentences(prompt))
+
+
+def _yield_sentences(prompt: str) -> Iterator[str]:
+    """Yield the LLM's answer sentence by sentence, or FALLBACK_TEXT if the request fails before any sentence."""
+    answered = False
     try:
-        response = ask_llm(prompt) or FALLBACK_TEXT
+        for sentence in ask_llm(prompt):
+            answered = True
+            yield sentence
     except requests.RequestException as exc:
         print(f"[assistant] ask_llm failed: {exc}", file=sys.stderr)
-        response = FALLBACK_TEXT
 
-    print(f"[assistant] LLM says: {response}", file=sys.stderr)
-    _speak(response)
-    return response
+    if not answered:
+        yield FALLBACK_TEXT
 
 
 # For testing and debugging, run this file directly to speak a prompt from the command line.

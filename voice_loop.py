@@ -29,7 +29,7 @@ OPEN_WAKE_WORD = os.environ["OPEN_WAKE_WORD"]
 # end-of-speech detection: whichever comes first ends the turn
 # close wake word firing, or END_SILENCE_SECONDS of trailing silence.
 SILENCE_RMS_THRESHOLD = 500  # per-chunk RMS at or below this counts as silence
-END_SILENCE_SECONDS = 3.0  # stop capturing after this much trailing silence
+END_SILENCE_SECONDS = 2.0  # stop capturing after this much trailing silence
 CHUNK_SECONDS = SAMPLES_PER_CHUNK / RATE
 END_SILENCE_CHUNKS = round(END_SILENCE_SECONDS / CHUNK_SECONDS)
 
