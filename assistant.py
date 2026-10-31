@@ -31,7 +31,7 @@ PLAYBACK_DEVICE = os.environ["AUDIO_DEVICE"]
 LEAD_SILENCE_SECONDS = 0.2
 FALLBACK_TEXT = "Sorry, something went wrong fetching the answer."
 
-CALENDAR_RE = re.compile(r"\b(calendar|appointment|meeting|schedule|event)\b", re.IGNORECASE)
+CALENDAR_RE = re.compile(r"\b(calendar|appointment|meeting|schedule|event|events)\b", re.IGNORECASE)
 WEATHER_RE = re.compile(r"\b(weather|temperature|forecast|rain|sunny|cold|hot)\b", re.IGNORECASE)
 
 
