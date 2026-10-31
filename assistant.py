@@ -84,8 +84,11 @@ def _speak(text: str) -> None:
 
     # aplay: ALSA playback utility. Reads audio and sends it to a sound device
     # match what the device wants.
+    #   --buffer-time - 0.5s playback buffer. The PowerConf goes idle while the LLM
+    #                   is thinking and stalls when playback starts, which drains
+    #                   the default buffer and makes aplay report "underrun!!!".
     aplay = subprocess.Popen(
-        [APLAY_BIN, "-q", "-D", PLAYBACK_DEVICE, "-"],
+        [APLAY_BIN, "-q", "--buffer-time=500000", "-D", PLAYBACK_DEVICE, "-"],
         stdin=sox.stdout,
     )
 
