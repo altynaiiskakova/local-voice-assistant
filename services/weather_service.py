@@ -32,15 +32,16 @@ def fetch_weather(city: str = DEFAULT_CITY) -> str:
     # 0 drop the "1/2/3 day forecast" header so the model sees only the current report
     response = requests.get(
         f"{WTTR_URL}/{quote(city)}",
-        params={"T": "", "0": ""},
+        params={"format": "%C, %t, feels like %f, wind %w, humidity %h, precipitation %p"},
         headers={"User-Agent": "curl/8"},
         timeout=15,
     )
     response.raise_for_status()
-    return response.text.strip()
+    text = re.sub(r"\s+,", ",", response.text.strip())
+    return text
 
 
 # for testing and debugging, run this file directly to see the current weather report
-# usage: python3 weather_service.py [city]
+# usage: uv run weather_service.py [city]
 if __name__ == "__main__":
     print(fetch_weather(" ".join(sys.argv[1:]) or DEFAULT_CITY))

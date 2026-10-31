@@ -9,7 +9,7 @@ from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.client import AsyncTcpClient
 from wyoming.wake import Detect, Detection
 
-from assistant import ask_and_speak
+from assistant import PLAYBACK_DEVICE, SOX_BIN, ask_and_speak
 
 load_dotenv()
 
@@ -25,12 +25,11 @@ WAKE_WORD_URI = os.environ["WAKE_WORD_URI"]
 WHISPER_URI = os.environ["WHISPER_URI"]
 
 OPEN_WAKE_WORD = os.environ["OPEN_WAKE_WORD"]
-CLOSE_WAKE_WORD = os.environ["CLOSE_WAKE_WORD"]
 
 # end-of-speech detection: whichever comes first ends the turn
 # close wake word firing, or END_SILENCE_SECONDS of trailing silence.
 SILENCE_RMS_THRESHOLD = 500  # per-chunk RMS at or below this counts as silence
-END_SILENCE_SECONDS = 3.0  # stop capturing after this much trailing silence
+END_SILENCE_SECONDS = 2.0  # stop capturing after this much trailing silence
 CHUNK_SECONDS = SAMPLES_PER_CHUNK / RATE
 END_SILENCE_CHUNKS = round(END_SILENCE_SECONDS / CHUNK_SECONDS)
 
@@ -43,6 +42,30 @@ WAKE_TAIL_SECONDS = 1.2  # drop the closing wake word itself
 WAKE_TAIL_BYTES = int(WAKE_TAIL_SECONDS * RATE) * WIDTH * CHANNELS
 PAUSE_TAIL_SECONDS = END_SILENCE_SECONDS - 0.5  # drop most of the trailing pause
 PAUSE_TAIL_BYTES = int(PAUSE_TAIL_SECONDS * RATE) * WIDTH * CHANNELS
+
+# wake word acknowledgement chime
+CHIME_VOLUME = 0.7  # between 0.0 - 1.0
+CHIME_LEAD_SECONDS = 0.3  # leading silence so the speaker can wake up before the chime
+
+
+def _chime_note(frequency: int, seconds: float) -> list[str]:
+    """
+    sox effects for one note: a sine with a 10ms fade-in, full volume for its first half, then a linear fade-out.
+    """
+    return ["synth", str(seconds), "sine", str(frequency), "fade", "t", "0.01", str(seconds), str(seconds / 2), "vol", str(CHIME_VOLUME)]
+
+
+# a rising two-note "ding". sox runs effect chains separated by ":" one after another,
+# and "pad" in the first chain prepends the lead silence.
+CHIME_SOX_EFFECTS = [*_chime_note(1320, 0.15), "pad", str(CHIME_LEAD_SECONDS), ":", *_chime_note(1760, 0.25)]
+
+
+async def play_chime() -> None:
+    """Play the chime to signal the assistant is listening after a wake word detection."""
+    # sox synthesizes the notes from null input (-n) and plays them straight to the ALSA (Advanced Linux Sound Architecture) device.
+    sox = await asyncio.create_subprocess_exec(SOX_BIN, "-q", "-n", "-c", "2", "-t", "alsa", PLAYBACK_DEVICE, *CHIME_SOX_EFFECTS)
+    if await sox.wait() != 0:
+        print(f"[voice_loop] sox exited {sox.returncode}", file=sys.stderr)
 
 
 async def start_mic() -> asyncio.subprocess.Process:
@@ -83,18 +106,14 @@ async def listen_for_open_wake_word(local_mic, wake_word: str) -> None:
     async with AsyncTcpClient.from_uri(WAKE_WORD_URI) as tcp_open_wake_client:
         await tcp_open_wake_client.write_event(Detect(names=[wake_word]).event())
 
-        await tcp_open_wake_client.write_event(
-            AudioStart(rate=RATE, width=WIDTH, channels=CHANNELS).event()
-        )
+        await tcp_open_wake_client.write_event(AudioStart(rate=RATE, width=WIDTH, channels=CHANNELS).event())
 
         detect_task = asyncio.create_task(_wake_word_detection(tcp_open_wake_client))
 
         try:
             while not detect_task.done():
                 chunk = await local_mic.stdout.readexactly(BYTES_PER_CHUNK)
-                await tcp_open_wake_client.write_event(
-                    AudioChunk(rate=RATE, width=WIDTH, channels=CHANNELS, audio=chunk).event()
-                )
+                await tcp_open_wake_client.write_event(AudioChunk(rate=RATE, width=WIDTH, channels=CHANNELS, audio=chunk).event())
 
             detection = detect_task.result()
             if detection is None:
@@ -126,25 +145,21 @@ async def capture_audio(local_mic) -> bytes:
     Trailing silence only starts counting once speech has been heard.
     The tail (pause) is chopped off the returned audio so whisper doesn't transcribe it.
     """
-    print(f"Capture until '{END_SILENCE_SECONDS:g}s pause.")
+    print(f"Capture until {END_SILENCE_SECONDS:g}s pause.")
 
     audio_buffer = bytearray()
     speech_started = False
     silent_chunks = 0
 
     async with AsyncTcpClient.from_uri(WAKE_WORD_URI) as tcp_close_wake_client:
-        await tcp_close_wake_client.write_event(
-            AudioStart(rate=RATE, width=WIDTH, channels=CHANNELS).event()
-        )
+        await tcp_close_wake_client.write_event(AudioStart(rate=RATE, width=WIDTH, channels=CHANNELS).event())
 
         try:
             while True:
                 # read a chunk of audio from the mic and send it to the wake service
                 chunk = await local_mic.stdout.readexactly(BYTES_PER_CHUNK)
                 audio_buffer.extend(chunk)
-                await tcp_close_wake_client.write_event(
-                    AudioChunk(rate=RATE, width=WIDTH, channels=CHANNELS, audio=chunk).event()
-                )
+                await tcp_close_wake_client.write_event(AudioChunk(rate=RATE, width=WIDTH, channels=CHANNELS, audio=chunk).event())
 
                 # Check for end of speech conditions: trailing silence
                 if _chunk_rms(chunk) > SILENCE_RMS_THRESHOLD:
@@ -154,6 +169,7 @@ async def capture_audio(local_mic) -> bytes:
                     silent_chunks += 1
                     if silent_chunks >= END_SILENCE_CHUNKS:
                         print("Detected pause, wrapping up.")
+                        await play_chime()
                         return _trim_tail(audio_buffer, PAUSE_TAIL_BYTES)
 
                 # Check for end of speech conditions: max time reached
@@ -179,15 +195,11 @@ async def transcribe(audio: bytes) -> str:
 
     async with AsyncTcpClient.from_uri(WHISPER_URI) as tcp_whisper_client:
         await tcp_whisper_client.write_event(Transcribe(language="en").event())
-        await tcp_whisper_client.write_event(
-            AudioStart(rate=RATE, width=WIDTH, channels=CHANNELS).event()
-        )
+        await tcp_whisper_client.write_event(AudioStart(rate=RATE, width=WIDTH, channels=CHANNELS).event())
         # send audio in chunks to whisper service
         for i in range(0, len(audio), BYTES_PER_CHUNK):
             chunk = audio[i : i + BYTES_PER_CHUNK]
-            await tcp_whisper_client.write_event(
-                AudioChunk(rate=RATE, width=WIDTH, channels=CHANNELS, audio=chunk).event()
-            )
+            await tcp_whisper_client.write_event(AudioChunk(rate=RATE, width=WIDTH, channels=CHANNELS, audio=chunk).event())
         # signal end of audio stream
         await tcp_whisper_client.write_event(AudioStop().event())
 
@@ -210,6 +222,7 @@ async def capture_and_transcribe_user_speech() -> str:
     local_mic = await start_mic()
     try:
         await listen_for_open_wake_word(local_mic, OPEN_WAKE_WORD)
+        await play_chime()
         user_audio = await capture_audio(local_mic)
     finally:
         local_mic.terminate()

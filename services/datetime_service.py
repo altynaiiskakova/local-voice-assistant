@@ -1,15 +1,12 @@
 from datetime import datetime
 
-# `date` output minus the timezone name: "Mon 31 Aug 16:46:12 2026"
-DATE_FORMAT = "+%a %d %b %H:%M:%S %Y"
 
-
-def current_datetime() -> str:
-    """Return the system date and time from the `date` CLI, without the tz name."""
-    return datetime.now().strftime("%A, %-d %B %Y, %-I:%M %p")
+def current_date() -> str:
+    """Return the system date from the `date` CLI, without the tz name."""
+    return datetime.now().strftime("%A, %-d %B %Y")
 
 
 # for testing and debugging, run this file directly to see the current date/time printed to stdout
-# usage: python3 datetime_service.py
+# usage: uv run datetime_service.py
 if __name__ == "__main__":
-    print(current_datetime())
+    print(current_date())
