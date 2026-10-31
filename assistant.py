@@ -15,7 +15,6 @@ from caldav.lib.error import DAVError
 
 from ollama_client import ask_llm
 from services.calendar_service import fetch_upcoming_events
-from services.datetime_service import current_datetime
 from services.weather_service import fetch_weather, match_city_from_prompt
 
 HOME = Path.home()
@@ -108,7 +107,7 @@ def _speak(text: str) -> None:
 
 def _build_prompt(question: str) -> str:
     """Assemble the full LLM prompt for `question`."""
-    parts = [f"The current date and time is {current_datetime()}."]
+    parts = []
 
     context = ""
     # If the prompt mentions calendar-related keywords, fetch events and include them in the prompt.
@@ -129,7 +128,7 @@ def _build_prompt(question: str) -> str:
         parts.append(context)
 
     parts.append(f"User's question: {question}")
-    return "\n\n".join(parts)
+    return "\n".join(parts)
 
 
 def ask_and_speak(question: str) -> str:

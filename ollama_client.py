@@ -5,6 +5,8 @@ import time
 import requests
 from dotenv import load_dotenv
 
+from services.datetime_service import current_date
+
 load_dotenv()
 
 OLLAMA_URL = os.environ["OLLAMA_URL"]
@@ -24,7 +26,8 @@ def ask_llm(prompt: str) -> str:
         OLLAMA_URL,
         json={
             "model": MODEL_NAME,
-            "system": SYSTEM_PROMPT,
+            # date goes last so the unchanging part of the system prompt stays a stable prefix
+            "system": f"{SYSTEM_PROMPT} Today is {current_date()}.",
             "prompt": prompt,
             "stream": False,
             "options": {
@@ -37,7 +40,6 @@ def ask_llm(prompt: str) -> str:
     print(f"[timing] Ollama request: {t3 - t2:.2f}s", file=sys.stderr)
 
     resp.raise_for_status()
-    print(f"[assistant] LLM raw response: {resp.json()}")
     return resp.json()["response"].strip()
 
 
