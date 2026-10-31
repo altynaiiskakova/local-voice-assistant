@@ -26,7 +26,7 @@ SOX_BIN = os.environ.get("SOX_BIN", "/usr/bin/sox")
 APLAY_BIN = os.environ.get("APLAY_BIN", "/usr/bin/aplay")
 PIPER_RATE = int(os.environ.get("PIPER_RATE", "22050"))  # 22050 Hz is the sample rate of the audio Piper produces.
 PLAYBACK_DEVICE = os.environ["AUDIO_DEVICE"]
-LEAD_SILENCE_SECONDS = float(os.environ.get("LEAD_SILENCE_SECONDS", "1"))
+LEAD_SILENCE_SECONDS = 1.0
 FALLBACK_TEXT = "Sorry, something went wrong fetching the answer."
 
 CALENDAR_RE = re.compile(r"\b(calendar|appointment|meeting|schedule|event)\b", re.IGNORECASE)

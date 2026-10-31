@@ -1,7 +1,10 @@
 import array
 import asyncio
+import io
+import math
 import os
 import sys
+import wave
 
 from dotenv import load_dotenv
 from wyoming.asr import Transcribe, Transcript
@@ -9,7 +12,7 @@ from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.client import AsyncTcpClient
 from wyoming.wake import Detect, Detection
 
-from assistant import ask_and_speak
+from assistant import APLAY_BIN, PLAYBACK_DEVICE, ask_and_speak
 
 load_dotenv()
 
@@ -25,7 +28,6 @@ WAKE_WORD_URI = os.environ["WAKE_WORD_URI"]
 WHISPER_URI = os.environ["WHISPER_URI"]
 
 OPEN_WAKE_WORD = os.environ["OPEN_WAKE_WORD"]
-CLOSE_WAKE_WORD = os.environ["CLOSE_WAKE_WORD"]
 
 # end-of-speech detection: whichever comes first ends the turn
 # close wake word firing, or END_SILENCE_SECONDS of trailing silence.
@@ -43,6 +45,46 @@ WAKE_TAIL_SECONDS = 1.2  # drop the closing wake word itself
 WAKE_TAIL_BYTES = int(WAKE_TAIL_SECONDS * RATE) * WIDTH * CHANNELS
 PAUSE_TAIL_SECONDS = END_SILENCE_SECONDS - 0.5  # drop most of the trailing pause
 PAUSE_TAIL_BYTES = int(PAUSE_TAIL_SECONDS * RATE) * WIDTH * CHANNELS
+
+# wake word acknowledgement chime
+CHIME_RATE = 22050 # Hz sample rate for the chime
+CHIME_NOTES = ((1320, 0.15), (1760, 0.25))  # (frequency Hz, seconds) => a rising two-note "ding"
+CHIME_VOLUME = 0.7  # between 0.0 - 1.0
+CHIME_LEAD_SECONDS = 0.3 # leading silence so the speaker can wake up before the chime
+
+
+def _make_chime() -> bytes:
+    """
+    Synthesize the chime once as an in-memory stereo WAV.
+    Each note is a sine with a fast attack, full volume for its first half, then a linear fade-out.
+    """
+    samples = array.array("h", [0, 0] * int(CHIME_LEAD_SECONDS * CHIME_RATE))
+    attack = int(0.01 * CHIME_RATE)
+    for frequency, seconds in CHIME_NOTES:
+        note_samples = int(seconds * CHIME_RATE)
+        for i in range(note_samples):
+            envelope = min(1.0, i / attack, 2 * (1 - i / note_samples))
+            value = int(CHIME_VOLUME * 32767 * envelope * math.sin(2 * math.pi * frequency * i / CHIME_RATE))
+            samples.extend((value, value))  # left, right
+
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav:
+        wav.setnchannels(2)
+        wav.setsampwidth(2)
+        wav.setframerate(CHIME_RATE)
+        wav.writeframes(samples.tobytes())
+    return buffer.getvalue()
+
+
+CHIME_WAV = _make_chime()
+
+
+async def play_chime() -> None:
+    """Play the chime to signal the assistant is listening after a wake word detection."""
+    aplay = await asyncio.create_subprocess_exec(APLAY_BIN, "-q", "-D", PLAYBACK_DEVICE, "-", stdin=asyncio.subprocess.PIPE)
+    await aplay.communicate(CHIME_WAV)
+    if aplay.returncode != 0:
+        print(f"[voice_loop] aplay exited {aplay.returncode}", file=sys.stderr)
 
 
 async def start_mic() -> asyncio.subprocess.Process:
@@ -198,6 +240,7 @@ async def capture_and_transcribe_user_speech() -> str:
     local_mic = await start_mic()
     try:
         await listen_for_open_wake_word(local_mic, OPEN_WAKE_WORD)
+        await play_chime()
         user_audio = await capture_audio(local_mic)
     finally:
         local_mic.terminate()
