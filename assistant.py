@@ -21,7 +21,13 @@ from wyoming.tts import Synthesize
 
 from ollama_client import ask_llm
 from services.calendar_service import fetch_upcoming_events
-from services.notes_service import add_to_shopping_list, match_note_from_prompt, match_shopping_items_from_prompt, save_note
+from services.notes_service import (
+    NOTES_ERRORS,
+    add_to_shopping_list,
+    match_note_from_prompt,
+    match_shopping_items_from_prompt,
+    save_note,
+)
 from services.weather_service import fetch_weather, match_city_from_prompt
 
 # External tools / audio config (override via env if paths differ).
@@ -133,7 +139,7 @@ def _save_note_context(note: str) -> str:
         return "The user asked to take a note but didn't say what to write. Ask them to repeat it with the note text."
     try:
         title = save_note(note)
-    except requests.RequestException as exc:
+    except NOTES_ERRORS as exc:
         # handled here, so the LLM never confirms a note that wasn't saved
         print(f"[assistant] saving note failed: {exc}", file=sys.stderr)
         return "Saving the note failed. Tell the user in one short sentence that the note could not be saved."
@@ -145,14 +151,17 @@ def _shopping_list_context(items: list[str]) -> str:
     if not items:
         return "The user asked to add to the shopping list but didn't say what. Ask them to repeat it with the items."
     try:
-        added = add_to_shopping_list(items)
-    except requests.RequestException as exc:
+        added, already_listed = add_to_shopping_list(items)
+    except NOTES_ERRORS as exc:
         # handled here, so the LLM never confirms items that weren't added
         print(f"[assistant] updating shopping list failed: {exc}", file=sys.stderr)
         return "Updating the shopping list failed. Tell the user in one short sentence that the items could not be added."
-    if not added:
-        return f"{', '.join(items)} were already on the shopping list. Tell the user so in one short sentence."
-    return f"Added {', '.join(added)} to the shopping list. Confirm this to the user in one short sentence."
+    outcome = []
+    if added:
+        outcome.append(f"Added {', '.join(added)} to the shopping list.")
+    if already_listed:
+        outcome.append(f"Already on the shopping list: {', '.join(already_listed)}.")
+    return " ".join(outcome) + " Tell the user this in one short sentence."
 
 
 def _build_prompt(question: str) -> str:
