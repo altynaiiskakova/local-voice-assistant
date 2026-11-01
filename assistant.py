@@ -21,6 +21,13 @@ from wyoming.tts import Synthesize
 
 from ollama_client import ask_llm
 from services.calendar_service import fetch_upcoming_events
+from services.notes_service import (
+    NOTES_ERRORS,
+    add_to_shopping_list,
+    match_note_from_prompt,
+    match_shopping_items_from_prompt,
+    save_note,
+)
 from services.weather_service import fetch_weather, match_city_from_prompt
 
 # External tools / audio config (override via env if paths differ).
@@ -126,18 +133,60 @@ def _speak(sentences: Iterable[str]) -> str:
     return " ".join(spoken)
 
 
+def _save_note_context(note: str) -> str:
+    """Save `note` and return the instruction telling the LLM how it went."""
+    if not note:
+        return "The user asked to take a note but didn't say what to write. Ask them to repeat it with the note text."
+    try:
+        title = save_note(note)
+    except NOTES_ERRORS as exc:
+        # handled here, so the LLM never confirms a note that wasn't saved
+        print(f"[assistant] saving note failed: {exc}", file=sys.stderr)
+        return "Saving the note failed. Tell the user in one short sentence that the note could not be saved."
+    return f'The note "{note}" was saved under the title "{title}". Confirm this to the user in one short sentence.'
+
+
+def _shopping_list_context(items: list[str]) -> str:
+    """Add `items` to the shopping list and return the instruction telling the LLM how it went."""
+    if not items:
+        return "The user asked to add to the shopping list but didn't say what. Ask them to repeat it with the items."
+    try:
+        added, already_listed = add_to_shopping_list(items)
+    except NOTES_ERRORS as exc:
+        # handled here, so the LLM never confirms items that weren't added
+        print(f"[assistant] updating shopping list failed: {exc}", file=sys.stderr)
+        return "Updating the shopping list failed. Tell the user in one short sentence that the items could not be added."
+    outcome = []
+    if added:
+        outcome.append(f"Added {', '.join(added)} to the shopping list.")
+    if already_listed:
+        outcome.append(f"Already on the shopping list: {', '.join(already_listed)}.")
+    return " ".join(outcome) + " Tell the user this in one short sentence."
+
+
 def _build_prompt(question: str) -> str:
     """Assemble the full LLM prompt for `question`."""
     parts = []
 
     context = ""
-    # If the prompt mentions calendar-related keywords, fetch events and include them in the prompt.
-    if CALENDAR_RE.search(question):
-        events = fetch_upcoming_events(7)
-        context = f"The user's calendar for the next 7 days:\n{events}\nAnswer the user's question based on this calendar."
+    
+    shopping_items = match_shopping_items_from_prompt(question)
+    note = match_note_from_prompt(question)
 
-    # If the prompt mentions weather-related keywords, fetch weather
-    # report and include it in the prompt.
+    # Shopping-list-related keywords, update that note and let the LLM confirm.
+    if shopping_items is not None:
+        context = _shopping_list_context(shopping_items)
+
+    # Note-related keywords, save it to Nextcloud Notes and let the LLM confirm. Checked before calendar, so "write down meeting with Bob" is a note.
+    elif note is not None:
+        context = _save_note_context(note)
+
+    # Calendar-related keywords, fetch events and include them in the prompt.
+    elif CALENDAR_RE.search(question):
+        events = fetch_upcoming_events(7)
+        context = f"Answer the user's question based on this calendar for the next 7 days:\n{events}\n."
+
+    # Weather-related keywords, fetch weather report and include it in the prompt.
     elif WEATHER_RE.search(question):
         city = match_city_from_prompt(question)
         report = fetch_weather(city)
