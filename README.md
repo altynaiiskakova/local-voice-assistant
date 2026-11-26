@@ -18,10 +18,27 @@ mic ──▶ openWakeWord ──▶ Whisper (STT) ──▶ prompt builder ─�
 | Language model | [Ollama](https://ollama.com/) (`gemma2:2b` by default) | local |
 | TTS | [Piper](https://github.com/rhasspy/wyoming-piper) via Wyoming | local (Docker) |
 | Calendar context | CalDAV (e.g. Nextcloud) | network - your server |
+| Notes & shopping list | [Nextcloud Notes](https://github.com/nextcloud/notes) API | network - your server |
 | Weather context | [wttr.in](https://wttr.in) | network - external |
 
-The voice pipeline is fully local. The two context lookups are optional and only
-run when the question mentions a calendar event or the weather.
+The voice pipeline is fully local. The network lookups are optional and only
+run when the request needs them: taking a note, adding to the shopping list,
+or asking about your calendar or the weather.
+
+## Architecture
+
+![System architecture](docs/architecture/architecture.svg)
+
+### One conversation turn
+
+![Sequence of one voice turn](docs/architecture/voice-turn-sequence.svg)
+
+The diagram sources are in [`docs/architecture/`](docs/architecture/) (PlantUML).
+After editing a `.puml` file, re-render the SVGs:
+
+```bash
+plantuml -tsvg docs/architecture/*.puml
+```
 
 ## Requirements
 
@@ -51,7 +68,10 @@ Run the voice loop:
 uv sync
 uv run voice_loop.py
 ```
-Say the open wake word, ask your question, then either say the close wake word or just pause.
+Say the wake word (set by `OPEN_WAKE_WORD`, e.g. `hey_luna`) and wait for the chime.
+Then ask your question and pause: after about 2.5 seconds of silence a second chime
+confirms the assistant heard you, and it answers out loud. A request is cut off
+after 60 seconds at most.
 
 
 ## Wake words
