@@ -1,0 +1,187 @@
+@startuml voice-turn-sequence
+' ============================================================================
+'  local-voice-assistant - one conversation turn (sequence view)
+'
+'  From wake word to spoken answer. The mic is closed before the LLM is
+'  called, so the assistant never hears its own voice.
+' ============================================================================
+
+title Local Voice Assistant - One Conversation Turn
+
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName "Helvetica"
+skinparam defaultFontSize 12
+skinparam shadowing false
+skinparam roundCorner 8
+skinparam maxMessageSize 220
+skinparam sequenceMessageAlign left
+skinparam responseMessageBelowArrow true
+skinparam ArrowColor #455A64
+
+skinparam title {
+  FontSize 18
+  FontStyle bold
+}
+
+skinparam sequence {
+  LifeLineBorderColor #90A4AE
+  LifeLineBackgroundColor #ECEFF1
+  ParticipantBorderColor #1E88E5
+  ParticipantBackgroundColor #E3F2FD
+  ParticipantFontStyle bold
+  ActorBorderColor #455A64
+  ActorBackgroundColor #FFFFFF
+  BoxBorderColor #B0BEC5
+  GroupBorderColor #78909C
+  GroupBackgroundColor #F5F5F5
+  DividerBackgroundColor #ECEFF1
+  DividerBorderColor #90A4AE
+}
+
+skinparam note {
+  BackgroundColor #FFFDE7
+  BorderColor #FBC02D
+}
+
+autonumber "<b>[00]"
+
+actor "User" as user
+
+box "Audio (ALSA)" #FFF8E1
+  participant "arecord" as arecord
+  participant "sox | aplay" as playback
+end box
+
+box "voice-assistant (Python)" #F1F8FE
+  participant "voice_loop.py" as vl
+  participant "assistant.py" as asst
+  participant "services/" as svc
+  participant "ollama_client.py" as llmc
+end box
+
+box "Docker (Wyoming)" #E0F2F1
+  participant "openWakeWord\n:10400" as oww
+  participant "Whisper\n:10300" as whisper
+  participant "Piper\n:10200" as piper
+end box
+
+box "Local LLM" #F3E5F5
+  participant "Ollama\n:11434" as ollama
+end box
+
+box "Network" #FBE9E7
+  participant "Nextcloud /\nwttr.in" as ext
+end box
+
+== 1. Wait for the wake word ==
+
+vl -> arecord : start_mic()
+activate arecord
+vl -> oww : Detect(names=[OPEN_WAKE_WORD]) + AudioStart
+activate oww
+loop until Detection arrives
+  arecord --> vl : raw PCM chunk (80 ms, 16 kHz mono)
+  vl -> oww : AudioChunk
+end
+user -> arecord : "Hey Luna"
+oww --> vl : Detection(hey_luna)
+vl -> oww : AudioStop
+deactivate oww
+
+vl -> playback : play_chime() (rising two-note ding)
+playback -> user : "ding"
+
+== 2. Capture the request ==
+
+user -> arecord : speaks the question
+loop until end of speech
+  arecord --> vl : raw PCM chunk
+  vl -> vl : buffer audio, RMS of chunk
+end
+note right of vl
+  The turn ends on whichever comes first:
+  * 2.5 s of trailing silence after speech
+    (RMS <= 500): chime, trim the pause
+  * 60 s max utterance (safety net)
+end note
+vl -> arecord : terminate()
+deactivate arecord
+note over vl : Mic closed: the assistant\ncannot hear its own TTS.
+
+== 3. Speech to text ==
+
+vl -> whisper : Transcribe(en) + AudioStart
+activate whisper
+vl -> whisper : AudioChunks + AudioStop
+whisper --> vl : Transcript(text)
+deactivate whisper
+
+opt empty transcript
+  vl -> vl : "No speech recognized", next turn
+end
+
+== 4. Build the prompt (intent routing) ==
+
+vl -> asst : ask_and_speak(transcript)
+activate asst
+
+alt "add X (and Y) to my shopping list"
+  asst -> svc : add_to_shopping_list(items)
+  svc -> ext : Nextcloud Notes: GET list, PUT with If-Match
+  ext --> svc : updated note
+  svc --> asst : added / already listed
+else "take a note / write down ..."
+  asst -> svc : save_note(text)
+  svc -> ext : Nextcloud Notes: POST note
+  ext --> svc : created note
+  svc --> asst : title
+else calendar keywords
+  asst -> svc : fetch_upcoming_events(7)
+  svc -> ext : CalDAV search (next 7 days)
+  ext --> svc : VEVENTs
+  svc --> asst : spoken-style event list
+else weather keywords
+  asst -> svc : match_city_from_prompt() + fetch_weather(city)
+  svc -> ext : GET wttr.in/{city}
+  ext --> svc : one-line report
+  svc --> asst : report
+else no match
+  asst -> asst : plain question, no context
+end
+note right of asst
+  Lookup errors are caught: the LLM is told
+  the action failed, or gets the bare question.
+end note
+
+== 5. Stream the answer, sentence by sentence ==
+
+asst -> llmc : ask_llm(prompt)
+activate llmc
+llmc -> ollama : POST /api/generate\n(system prompt + today's date, stream: true)
+activate ollama
+
+loop each completed sentence
+  ollama --> llmc : NDJSON tokens
+  llmc --> asst : yield sentence
+  asst -> piper : Synthesize(sentence)
+  activate piper
+  piper --> asst : AudioStart, AudioChunks, AudioStop
+  deactivate piper
+  asst -> playback : write PCM (sox + aplay start on first chunk)
+  playback -> user : spoken sentence
+end
+deactivate ollama
+deactivate llmc
+
+opt Ollama failed before any sentence
+  asst -> piper : Synthesize(FALLBACK_TEXT)
+  asst -> playback : write PCM
+end
+
+asst -> playback : close stdin, wait for playback to end
+asst --> vl : spoken text
+deactivate asst
+
+vl -> vl : next turn (back to step 1)
+
+@enduml

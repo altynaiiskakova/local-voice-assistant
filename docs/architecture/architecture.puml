@@ -1,0 +1,185 @@
+@startuml architecture
+' ============================================================================
+'  local-voice-assistant - system architecture (component / deployment view)
+'
+'  Shows where every part runs, what talks to what, and over which protocol.
+'  Source of truth: voice_loop.py, assistant.py, ollama_client.py, services/,
+'  docker-compose.yml, .env.example
+' ============================================================================
+
+title Local Voice Assistant - System Architecture
+
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName "Helvetica"
+skinparam defaultFontSize 12
+skinparam shadowing false
+skinparam roundCorner 10
+skinparam linetype ortho
+skinparam nodesep 60
+skinparam ranksep 70
+skinparam ArrowColor #455A64
+skinparam ArrowFontColor #37474F
+skinparam ArrowFontSize 10
+
+skinparam title {
+  FontSize 18
+  FontStyle bold
+}
+
+skinparam node {
+  BackgroundColor #FAFAFA
+  BorderColor #90A4AE
+  FontStyle bold
+}
+
+skinparam package {
+  BackgroundColor #FFFFFF
+  BorderColor #B0BEC5
+  FontStyle bold
+}
+
+skinparam cloud {
+  BackgroundColor #F5F5F5
+  BorderColor #90A4AE
+}
+
+skinparam component {
+  BackgroundColor #E3F2FD
+  BorderColor #1E88E5
+  FontStyle normal
+  BackgroundColor<<python>> #E3F2FD
+  BorderColor<<python>> #1E88E5
+  BackgroundColor<<service>> #E8EAF6
+  BorderColor<<service>> #3949AB
+  BackgroundColor<<container>> #E0F2F1
+  BorderColor<<container>> #00897B
+  BackgroundColor<<llm>> #F3E5F5
+  BorderColor<<llm>> #8E24AA
+  BackgroundColor<<cli>> #FFF8E1
+  BorderColor<<cli>> #FFA000
+  BackgroundColor<<external>> #FBE9E7
+  BorderColor<<external>> #E64A19
+}
+
+skinparam database {
+  BackgroundColor #ECEFF1
+  BorderColor #78909C
+}
+
+skinparam file {
+  BackgroundColor #ECEFF1
+  BorderColor #78909C
+}
+
+skinparam legend {
+  BackgroundColor #FAFAFA
+  BorderColor #B0BEC5
+  FontSize 11
+}
+
+actor "User" as user
+
+node "Audio hardware" as hw {
+  component "Microphone\n(16 kHz, mono, S16_LE)" as mic <<cli>>
+  component "Speaker\n(stereo)" as speaker <<cli>>
+}
+
+node "Homelab host (Linux)" as host {
+
+  package "voice-assistant  (Python >= 3.11, uv)" as app {
+
+    component "voice_loop.py\n--\nmain loop, mic capture,\nwake-word streaming,\nsilence / end-of-speech detection,\nchime, STT client" as voice_loop <<python>>
+
+    component "assistant.py\n--\nintent routing (regex),\nprompt builder,\nsentence-streamed TTS + playback" as assistant <<python>>
+
+    component "ollama_client.py\n--\nstreaming LLM client,\nsplits reply into sentences" as ollama_client <<python>>
+
+    package "services/" as services {
+      component "notes_service\n--\nnotes + shopping list\n(one requests.Session, auth)" as notes_svc <<service>>
+      component "calendar_service\n--\nevents for next 7 days" as calendar_svc <<service>>
+      component "weather_service\n--\ncity extraction + report" as weather_svc <<service>>
+      component "datetime_service\n--\ncurrent date" as datetime_svc <<service>>
+    }
+  }
+
+  package "ALSA / audio tools" as alsa {
+    component "arecord" as arecord <<cli>>
+    component "sox" as sox <<cli>>
+    component "aplay" as aplay <<cli>>
+  }
+
+  file ".env" as env
+
+  node "Docker Compose  (Wyoming protocol over TCP)" as compose {
+    component "openWakeWord\n:10400\n--\nwake word: hey_luna\nthreshold 0.3" as oww <<container>>
+    component "faster-whisper (STT)\n:10300\n--\nmodel base.en" as whisper <<container>>
+    component "Piper (TTS)\n:10200\n--\nvoice en_US-libritts_r-medium" as piper <<container>>
+  }
+
+  database "custom-models/\n(*.tflite)" as vol_models
+  database "whisper-data/" as vol_whisper
+  database "piper-data/" as vol_piper
+
+  component "Ollama\n:11434\n--\nlocal SLM (default gemma2:2b)" as ollama <<llm>>
+}
+
+cloud "Home network (LAN)" as lan {
+  component "Nextcloud\n--\nCalDAV\nNotes app API" as nextcloud <<external>>
+}
+
+cloud "Internet" as internet {
+  component "wttr.in\n--\nweather API" as wttr <<external>>
+}
+
+' ---------------------------------------------------------------- audio in
+user --> mic : speaks
+mic --> arecord : ALSA capture
+arecord --> voice_loop : raw PCM stream (stdout)
+
+' ---------------------------------------------------------------- voice pipeline
+voice_loop --> oww : AudioChunk stream,\nDetection event back
+voice_loop --> whisper : buffered utterance,\nTranscript event back
+voice_loop --> assistant : ask_and_speak(transcript)
+voice_loop ..> sox : chime (synth)
+
+' ---------------------------------------------------------------- context + LLM
+assistant --> notes_svc
+assistant --> calendar_svc
+assistant --> weather_svc
+assistant --> ollama_client : prompt with context
+ollama_client --> datetime_svc : date for system prompt
+ollama_client --> ollama : HTTP POST /api/generate\n(stream: true, NDJSON)
+
+notes_svc --> nextcloud : HTTPS REST\n(Basic auth, If-Match / ETag)
+calendar_svc --> nextcloud : CalDAV
+weather_svc --> wttr : HTTPS GET
+
+' ---------------------------------------------------------------- audio out
+assistant --> piper : Synthesize(text),\nAudioChunks back
+assistant --> sox : raw PCM\n(pad + mono to stereo)
+sox --> aplay : WAV (pipe)
+aplay --> speaker : ALSA playback
+speaker --> user : hears the answer
+
+' ---------------------------------------------------------------- config + data
+env ..> app : config + secrets\n(python-dotenv)
+oww ..> vol_models : mounts
+whisper ..> vol_whisper : mounts
+piper ..> vol_piper : mounts
+
+legend right
+  <b>Legend</b>
+  |= Colour |= Meaning |
+  |<#E3F2FD>| Python application module |
+  |<#E8EAF6>| Context / action service |
+  |<#E0F2F1>| Docker container (Wyoming) |
+  |<#F3E5F5>| Local LLM runtime |
+  |<#FFF8E1>| Audio hardware / CLI tool |
+  |<#FBE9E7>| Network service (leaves the host) |
+
+  Voice pipeline runs only on the host.
+  Nextcloud and wttr.in are reached only when
+  the request needs notes, calendar or weather.
+endlegend
+
+@enduml
